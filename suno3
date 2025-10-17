@@ -1,0 +1,100 @@
+#include <AFMotor.h>
+#include <NewPing.h>
+
+// --------- Configuração de hardware ----------
+AF_DCMotor motor1(3); // motor esquerdo
+AF_DCMotor motor2(4); // motor direito
+
+const int sensorFrontal = 52;  // IR frontal
+const int sensorTraseiro = 53; // IR traseiro
+
+#define TRIGGER_PIN  51
+#define ECHO_PIN     50
+#define MAX_DIST     200
+
+NewPing sonar(TRIGGER_PIN, ECHO_PIN, MAX_DIST);
+
+// ---------- Velocidades ----------
+const uint8_t SPD_NORMAL = 120;
+const uint8_t SPD_TURN = 130;
+
+unsigned long lastScan = 0;
+const unsigned long SCAN_INTERVAL = 80;
+
+long lerDistanciaCm() {
+  unsigned int d = sonar.ping_cm();
+  if (d == 0) return 999;
+  return (long)d;
+}
+
+void pararMotores() {
+  motor1.run(RELEASE);
+  motor2.run(RELEASE);
+}
+
+void andarFrente(uint8_t speed) {
+  motor1.setSpeed(speed);
+  motor1.run(FORWARD);
+  motor2.setSpeed(speed);
+  motor2.run(FORWARD);
+}
+
+void andarTras(uint8_t speed) {
+  motor1.setSpeed(speed);
+  motor1.run(BACKWARD);
+  motor2.setSpeed(speed);
+  motor2.run(BACKWARD);
+}
+
+void girarEsquerda(uint8_t speed) {
+  motor1.setSpeed(speed);
+  motor1.run(BACKWARD);
+  motor2.setSpeed(speed);
+  motor2.run(FORWARD);
+}
+
+void setup() {
+  pinMode(sensorFrontal, INPUT);
+  pinMode(sensorTraseiro, INPUT);
+  Serial.begin(9600);
+}
+
+void loop() {
+  int f = digitalRead(sensorFrontal);
+  int t = digitalRead(sensorTraseiro);
+  long dist = 999;
+
+  // Ler distância com intervalo
+  if (millis() - lastScan > SCAN_INTERVAL) {
+    dist = lerDistanciaCm();
+    lastScan = millis();
+  }
+
+  // Caso 1: ambos sensores IR detectam branco e não há obstáculo
+  if (f == HIGH && t == HIGH && dist == 999) {
+    // Gira até encontrar algo
+    girarEsquerda(SPD_TURN);
+    return;
+  }
+
+  // Caso 2: sensor frontal detecta preto -> andar para trás
+  if (f == LOW) {
+    andarTras(SPD_NORMAL);
+    return;
+  }
+
+  // Caso 3: sensor traseiro detecta preto -> andar para frente
+  if (t == LOW) {
+    andarFrente(SPD_NORMAL);
+    return;
+  }
+
+  // Caso 4: sensor de distância detecta algo -> andar para frente
+  if (dist < 999) {
+    andarFrente(SPD_NORMAL);
+    return;
+  }
+
+  // Caso padrão: parar motores
+  pararMotores();
+}
