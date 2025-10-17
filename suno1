@@ -1,0 +1,264 @@
+#include <AFMotor.h>
+#include <NewPing.h>
+
+// --------- Configuração de hardware (conforme você informou) ----------
+AF_DCMotor motor1(1); // motor esquerdo (ajuste se for o contrário)
+AF_DCMotor motor2(2); // motor direito
+
+const int sensorFrontal = 52;  // IR frontal
+const int sensorTraseiro = 53; // IR traseiro
+
+#define TRIGGER_PIN  A9  // TRIG do ultrassônico
+#define ECHO_PIN     A8  // ECHO do ultrassônico
+#define MAX_DIST     200 // alcance máximo em cm
+
+NewPing sonar(TRIGGER_PIN, ECHO_PIN, MAX_DIST);
+
+// --------- Parâmetros de comportamento (tune aqui) ------------
+const unsigned int DIST_ACHAR = 45;  // distância para "detectar" um oponente (cm)
+const unsigned int DIST_ATAQUE = 18; // distância para iniciar ataque (cm)
+const unsigned int DIST_RECUAR = 10; // se muito perto, recua (cm)
+
+const uint8_t SPD_SEARCH = 100; // velocidade ao buscar (reduzido para teste)
+const uint8_t SPD_APPROACH = 120; // velocidade ao aproximar (reduzido para teste)
+const uint8_t SPD_CHARGE = 150; // velocidade no ataque (reduzido para teste)
+const uint8_t SPD_TURN = 130; // velocidade ao virar (reduzido para teste)
+
+// temporizadores (ms)
+const unsigned long TIME_ATTACK_BURST = 300; // duração de uma carga forte
+const unsigned long TIME_RECOVERY = 600;    // tempo de recuperação após ataque
+const unsigned long TIME_CIRCLE = 900;      // tempo para circundar/rasteira
+const unsigned long TIME_FLANK = 600;       // tempo de flanqueio (giro curto + carga)
+
+// ---------- Estados ----------
+enum State {SEARCH, APPROACH, ATTACK, EVADE, RECOVER};
+State state = SEARCH;
+
+// ---------- Controle de tempo ----------
+unsigned long stateStart = 0;
+unsigned long lastScan = 0;
+const unsigned long SCAN_INTERVAL = 80; // intervalo entre leituras sonar (ms)
+
+// ---------- Funções utilitárias ----------
+long lerDistanciaCm() {
+  // NewPing retorna 0 se não detectar
+  unsigned int d = sonar.ping_cm();
+  if (d == 0) return 999; // sem leitura -> considerar muito longe
+  return (long)d;
+}
+
+void setSpeedBoth(uint8_t sLeft, uint8_t sRight) {
+  motor1.setSpeed(sLeft);
+  motor2.setSpeed(sRight);
+}
+
+void pararMotores() {
+  motor1.run(RELEASE);
+  motor2.run(RELEASE);
+}
+
+void andarFrente(uint8_t speed) {
+  motor1.setSpeed(speed);
+  motor1.run(FORWARD);
+  motor2.setSpeed(speed);
+  motor2.run(FORWARD);
+}
+
+void andarTras(uint8_t speed) {
+  motor1.setSpeed(speed);
+  motor1.run(BACKWARD);
+  motor2.setSpeed(speed);
+  motor2.run(BACKWARD);
+}
+
+void girarEsquerda(uint8_t speed) {
+  motor1.setSpeed(speed);
+  motor1.run(BACKWARD);
+  motor2.setSpeed(speed);
+  motor2.run(FORWARD);
+}
+
+void girarDireita(uint8_t speed) {
+  motor1.setSpeed(speed);
+  motor1.run(FORWARD);
+  motor2.setSpeed(speed);
+  motor2.run(BACKWARD);
+}
+
+// ---------- Comportamentos de ataque (variados) ----------
+void ataqueCurto() {
+  // investida direta curta
+  andarFrente(SPD_CHARGE);
+  delay(TIME_ATTACK_BURST); // uso delay curto intencional durante carga curta para consistência
+  pararMotores();
+}
+
+void ataqueRajada() {
+  // 2 pequenas cargas com pequenos ajustes de direção
+  for (int i=0;i<2;i++){
+    andarFrente(SPD_CHARGE);
+    delay(180);
+    // leve correção aleatória
+    if (random(0,100) < 50) girarEsquerda(SPD_TURN/2);
+    else girarDireita(SPD_TURN/2);
+    delay(120);
+  }
+  pararMotores();
+}
+
+void rastradaCircundar() {
+  // circundar com roda direita mais lenta pra "contornar" o oponente
+  motor1.setSpeed(SPD_TURN*0.6); motor1.run(FORWARD); // esquerdo mais lento
+  motor2.setSpeed(SPD_TURN); motor2.run(FORWARD);     // direito mais rápido
+  delay(TIME_CIRCLE);
+  pararMotores();
+}
+
+void flanqueio() {
+  // giro curto + carga
+  girarEsquerda(SPD_TURN);
+  delay(250 + random(-100,100));
+  ataqueCurto();
+}
+
+// ---------- Segurança: evita borda ----------
+bool checarBorda() {
+  int f = digitalRead(sensorFrontal);
+  int t = digitalRead(sensorTraseiro);
+  // assumo sensores IR ativos em HIGH quando detectam chão; ajuste se invertido.
+  // Se detectar borda (leitura == LOW) -> retorna true
+  if (f == LOW || t == LOW) return true;
+  return false;
+}
+
+void evitaBorda() {
+  // reação rápida: recuar e girar aleatoriamente
+  andarTras(170);
+  delay(300);
+  if (random(0, 100) < 50) girarEsquerda(200);
+  else girarDireita(200);
+  delay(350 + random(-150,150));
+  pararMotores();
+}
+
+// ---------- Setup e loop ----------
+void setup() {
+  pinMode(sensorFrontal, INPUT);
+  pinMode(sensorTraseiro, INPUT);
+  Serial.begin(9600);
+  randomSeed(analogRead(A0)); // semente aleatória
+  state = SEARCH;
+  stateStart = millis();
+}
+
+void loop() {
+  // não ler sonar toda iteração para economia; usar intervalo
+  unsigned long now = millis();
+  long dist = 999;
+  if (now - lastScan >= SCAN_INTERVAL) {
+    dist = lerDistanciaCm();
+    lastScan = now;
+  }
+
+  // checa borda a qualquer momento
+  if (checarBorda()) {
+    // prioridade: evita borda imediatamente
+    evitaBorda();
+    state = SEARCH;
+    stateStart = millis();
+    return;
+  }
+
+  // State machine simples
+  switch(state) {
+    case SEARCH:
+      // roda procurando: movimento lento e pequenas variações (variação aleatória)
+      if (dist < DIST_ACHAR) {
+        state = APPROACH;
+        stateStart = now;
+        break;
+      }
+      // mover-se em curva leve pra varrer arena
+      motor1.setSpeed(SPD_SEARCH);
+      motor1.run(FORWARD);
+      motor2.setSpeed(SPD_SEARCH*0.75); // curva suave
+      motor2.run(FORWARD);
+      // às vezes faz uma manobra de "feint" (finta)
+      if (random(0,1000) < 6) {
+        // finta aleatória: recuar e virar
+        andarTras(170); delay(220);
+        if (random(0,100) < 50) girarEsquerda(200); else girarDireita(200);
+        delay(240);
+        pararMotores();
+      }
+      break;
+
+    case APPROACH:
+      // aproxima-se com cautela
+      if (dist == 999) {
+        // perdeu o alvo, volta a procurar
+        state = SEARCH;
+        stateStart = now;
+        break;
+      }
+      if (dist <= DIST_RECUAR) {
+        // parado muito perto: recuar e reposicionar
+        andarTras(200);
+        delay(250);
+        if (random(0,100) < 50) girarEsquerda(SPD_TURN); else girarDireita(SPD_TURN);
+        delay(220);
+        pararMotores();
+        state = EVADE;
+        stateStart = now;
+        break;
+      }
+      if (dist <= DIST_ATAQUE) {
+        state = ATTACK;
+        stateStart = now;
+        break;
+      }
+      // aproximação: avança controlado
+      motor1.setSpeed(SPD_APPROACH);
+      motor1.run(FORWARD);
+      motor2.setSpeed(SPD_APPROACH);
+      motor2.run(FORWARD);
+      break;
+
+    case ATTACK:
+      // comportamentos de ataque variados (escolhe aleatório)
+      {
+        int escolha = random(0,100);
+        if (escolha < 35) ataqueCurto();
+        else if (escolha < 65) ataqueRajada();
+        else if (escolha < 85) rastradaCircundar();
+        else flanqueio();
+
+        // após atacar, curta recuperação para avaliar situação
+        state = RECOVER;
+        stateStart = now;
+      }
+      break;
+
+    case EVADE:
+      // pequeno tempo para reposicionar
+      if (now - stateStart > 500) {
+        state = SEARCH;
+        stateStart = now;
+      }
+      break;
+
+    case RECOVER:
+      // recua um pouco e decide próximo movimento
+      andarTras(170);
+      delay(TIME_RECOVERY);
+      pararMotores();
+      // Decide próximo estado: às vezes tenta nova aproximação, outras vezes procura
+      if (random(0,100) < 65) state = APPROACH;
+      else state = SEARCH;
+      stateStart = now;
+      break;
+  }
+
+  // pequena pausa não bloqueante geral (evita loop muito acelerado)
+  delay(8);
+}
