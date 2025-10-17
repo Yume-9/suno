@@ -1,0 +1,110 @@
+//Programa: Robô sumô
+//Autor: Alexsandro
+//Blog:  Eletrogate
+//Versão: 1.0
+
+//********************Inclusão das bibliotecas**************
+
+#include <AFMotor.h> //Biblioteca do motor shield
+#include <Ultrasonic.h> //Bibloteca do sensor ultrassônico
+
+//********************Definição dos pinos********************
+
+#define trigger A9       // Porta analógica 9 (TRIG do sensor ultrassônico)
+#define echo   A8       // Porta analógica 8 (ECHO do sensor ultrassônico)
+#define sensor1 52      // Porta digital 52 (sensor frontal)
+#define sensor2 53      // Porta digital 53 (sensor traseiro)
+
+//********************Criação dos objetos********************
+
+AF_DCMotor motor_esquerdo(3);  // Motor esquerdo (M3)
+AF_DCMotor motor_direito(4);   // Motor direito (M4)
+Ultrasonic ultrasonic(trigger, echo); // Sensor ultrassônico
+
+//********************Função de configuração******************
+
+void setup() {
+  //Configuração de velocidade dos motores
+  motor_esquerdo.setSpeed(255);  // Velocidade vai de 0 a 255
+  motor_direito.setSpeed(255);   
+  Serial.begin(9600);  // Habilita a comunicação serial
+  pinMode(sensor1, INPUT);  // Configura o pino do sensor 1 como entrada
+  pinMode(sensor2, INPUT);  // Configura o pino do sensor 2 como entrada
+}
+
+//********************Função de principal********************
+
+void loop() {
+  //Cálculo e conversão da leitura do sensor ultrassônico
+  long microsec = ultrasonic.timing();
+  float distancia = ultrasonic.convert(microsec, Ultrasonic::CM);
+  
+  // Verifica se tem alguma coisa na sua frente e se os sensores estão no branco
+  if (distancia > 20 && digitalRead(sensor1) == 0 && digitalRead(sensor2) == 0) {
+    Serial.println("procurando oponente");
+    // Dúas formas de procurar o oponente na arena
+    procura();  // Procura em forma de quadrado
+    //esquerda(); // Fica girando
+  }
+
+  // Se encontrar algo na sua frente
+  if (distancia < 20 && distancia > 0 && digitalRead(sensor1) == 0 && digitalRead(sensor2) == 0) {
+    while (digitalRead(sensor1) == 0) {  // Prende na condição até o sensor encontrar a borda da arena
+      Serial.println("achei o oponente");
+      frente();  // Move para frente
+    }
+    parada();
+    delay(1000);
+    tras();
+    delay(1000);
+  }
+
+  // Se encontrar a borda e não o oponente
+  if (digitalRead(sensor1) == 1 && digitalRead(sensor2) == 0) {
+    Serial.println("Sensor da frente achou borda");
+    tras();
+    delay(500);
+  }
+  if (digitalRead(sensor1) == 0 && digitalRead(sensor2) == 1) {
+    Serial.println("Sensor de trás achou borda");
+    frente();
+    delay(500);
+  }
+}
+
+//********************Movimenta o robô para frente********************
+
+void frente() {
+  motor_esquerdo.run(FORWARD);  // Motor esquerdo (M3)
+  motor_direito.run(FORWARD);   // Motor direito (M4)
+}
+
+//********************Movimenta o robô para trás********************
+
+void tras() {
+  motor_esquerdo.run(BACKWARD);  // Motor esquerdo (M3)
+  motor_direito.run(BACKWARD);   // Motor direito (M4)
+}
+
+//********************Parada dos motores********************
+
+void parada() {
+  motor_esquerdo.run(RELEASE);  // Motor esquerdo (M3)
+  motor_direito.run(RELEASE);   // Motor direito (M4)
+}
+
+//********************Movimenta o robô para esquerda********************
+
+void esquerda() {
+  motor_esquerdo.run(FORWARD);  // Motor esquerdo (M3)
+  motor_direito.run(BACKWARD);  // Motor direito (M4)
+}
+
+//********************Movimenta o robô em forma de quadrado********************
+
+void procura() {
+  frente();
+  delay(300);
+  esquerda();
+  delay(300);
+}
